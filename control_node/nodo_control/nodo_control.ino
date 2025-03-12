@@ -50,7 +50,7 @@ float rpm2rads = 0.104719;
 // ======= Variables para el controlador PID
 float currentTime = 0.0, elapsedTime = 0.0, previousTime = 0.0,
       pwm_set_point = 0.0, error = 0.0, integral = 0.0, derivative = 0.0, lastError = 0.0, output = 0.0,
-      kp = 0.09, ki = 0.066, kd = 0.0015;
+      kp = 0.09, ki = 0.071, kd = 0.0025;
 
 int pwm_signal = 0, pwm_prev = 0;
 
@@ -169,7 +169,7 @@ void subscription_callback(const void * msgin) {
     digitalWrite(In2, LOW);
   }
 
-  pwm_signal = (int)(fabs(output / 12)*130)+ 125; // Mapeo a PWM
+  pwm_signal = (int)(fabs(output / 12)*130)+ 125; // Mapeo a PWM 130(Numero de PWM disponible)
   pwm_prev = pwm_signal;
   //tmp_msg.data = velocidad;
   //rcl_publish(&tmp_publisher, &tmp_msg, NULL);
