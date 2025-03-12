@@ -17,7 +17,6 @@ rcl_allocator_t allocator;    // Handles memory allocation
 rcl_node_t control_node;              // Defines the ROS 2 node
 
 rcl_publisher_t motor_output_publisher;    // Publishes motor output signal
-rcl_publisher_t tmp_publisher;
 rcl_subscription_t set_point_subscriber;   // Subscribes to set point input signal
 rcl_timer_t timer;                   // Periodically publishes button state
 
@@ -25,16 +24,14 @@ rcl_timer_t timer;                   // Periodically publishes button state
 std_msgs__msg__Float32 motor_output_msg;    // Holds the button state ("active" or "inactive")
 std_msgs__msg__Float32 set_point_msg;      // Holds the LED brightness value
 
-std_msgs__msg__Float32 tmp_msg;
-
 const double timer_timeout = 0.09398;  // Timer period (ms)
 
 // =========== Variables para el encoder
 
 volatile int32_t tiempo_act = 0,
-        tiempo_ant = 0,
-        delta_tiempo = 2e9,
-        contador = 0;
+                 tiempo_ant = 0,
+                 delta_tiempo = 2e9,
+                 contador = 0;
 int32_t revoluciones;
 
 float posicion=0, posactual = 0, posanterior = 0,
@@ -43,16 +40,19 @@ float posicion=0, posactual = 0, posanterior = 0,
 
 int pulsos = 456, sign = 0;      //Número de pulsos a la salida del motorreductor
 
-volatile bool BSet = 0,
-              ASet = 0,
-              encoderDirection = false;
+volatile bool encoderDirection = false;
 
 float rpm2rads = 0.104719;
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////7
 
 // ======= Variables para el controlador PID
 float currentTime = 0.0, elapsedTime = 0.0, previousTime = 0.0,
       pwm_set_point = 0.0, error = 0.0, integral = 0.0, derivative = 0.0, lastError = 0.0, output = 0.0,
-      kp = 0.682256, ki = 33.575487, kd = 0.001333;
+      kp = 0.09, ki = 0.066, kd = 0.0015;
+
+int pwm_signal = 0, pwm_prev = 0;
 
 // ======== Macro Definitions ========
 // Error handling macros
@@ -60,7 +60,6 @@ float currentTime = 0.0, elapsedTime = 0.0, previousTime = 0.0,
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){return false;}}
 // Executes fn, but ignores failures.
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){}}
-
 // Executes a statement (X) every N milliseconds
 #define EXECUTE_EVERY_N_MS(MS, X)  do { \
   static volatile int64_t init = -1; \
@@ -74,7 +73,7 @@ float currentTime = 0.0, elapsedTime = 0.0, previousTime = 0.0,
 #define PWM_RES 8 //Resolución de PWM 2^10 = 1024
 #define PWM_CHNL 0 // Canal de PWM
 
-#define In1  14 // Pin de salida digital 
+#define In1  14 // Pin de salida digital
 #define In2  27 // Pin de salida digital
 
 #define EncA  33 // GPIO para señal A del encoder
@@ -95,19 +94,11 @@ enum states {
 bool create_entities();
 void destroy_entities();
 
-void IRAM_ATTR Encoder()
-{
-  BSet = digitalRead(EncB);
-  ASet = digitalRead(EncA);
-  if (BSet == ASet)
-  {
+void IRAM_ATTR Encoder(){
+  if (digitalRead(EncB) == digitalRead(EncA)){
     contador++;
     encoderDirection = true;
-  }
-  //Si ambas señales leídas son distintas, el motor gira en sentido horario
-  //y se decrementa un contador para saber el número de lecturas
-  else
-  {
+  }else{
     contador--;
     encoderDirection = false;
   }
@@ -118,33 +109,23 @@ void IRAM_ATTR Encoder()
 
 void velocidad_w(){
   if (encoderDirection){
-      posicion = contador * resolucion; //Convertir a grados
-      if (contador >= pulsos) //Contar por revoluciones
-      {
-        revoluciones++;
-        contador = 0;
-      }
-      sign = 1;
-    }
-    else{
-      posicion = contador * resolucion; //Convertir a grados 
-      if (contador <= -pulsos) //Contar por revoluciones
-      {
-        revoluciones--;
-        contador = 0;
-      }
-      sign = -1;
-    }
-    
-    //Cálculo de la velocidad mediante un delta de tiempo  
-    if(delta_tiempo > 250){
-      velocidad = 60000000/(pulsos * delta_tiempo); //  Convertir a segundos nuevamente multiplicando por 60000000
-      loop_vel = velocidad*rpm2rads*sign;
-    }
+    sign = 1;
+  }
+  else{
+    sign = -1;
+  }
+   //Cálculo de la velocidad mediante un delta de tiempo 
+  if(delta_tiempo > 250){
+    velocidad = 60000000/(pulsos * delta_tiempo); //  Convertir a segundos nuevamente multiplicando por 60000000
+    velocidad = velocidad*rpm2rads*sign;
+  }
+  if (micros() - tiempo_act > 100000) {  // 100,000 us = 100 ms
+    velocidad = 0.0;
+  }
 }
 
 void publish_vel(){
-  motor_output_msg.data = loop_vel;
+  motor_output_msg.data = velocidad;
   rcl_publish(&motor_output_publisher, &motor_output_msg, NULL);
 }
 
@@ -152,79 +133,67 @@ void publish_vel(){
 void timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
   (void) last_call_time;
   if (timer != NULL) {
-    /*
-    tiempo_act = micros();
-    delta_tiempo = tiempo_act - tiempo_ant;
-    tiempo_ant = tiempo_act;
-
-    float delta_tiempo_seg = delta_tiempo / 1e6;
-
-    // Calcular velocidad en rad/s
-    float vueltas = contador / (float)pulsos;  
-    velocidad = (vueltas / delta_tiempo_seg) * 2 * M_PI;  // rad/s  
-    
-    contador = 0;
-
-    motor_output_msg.data = velocidad;
-    */
+    velocidad_w();
     publish_vel();
   }
 }
 // ======== Subscriber Callback: Adjusts LED Brightness ========
-void subscription_callback(const void * msgin) {  
+void subscription_callback(const void * msgin) { 
   const std_msgs__msg__Float32 * msg = (const std_msgs__msg__Float32 *)msgin;
   pwm_set_point = constrain(msg->data, OMEGA_MIN, OMEGA_MAX);
 
-  if (pwm_set_point < 0){
-      digitalWrite(In1, HIGH);
-      digitalWrite(In2, LOW);
-  }else if(pwm_set_point > 0){
-      digitalWrite(In1, LOW);
-      digitalWrite(In2, HIGH); 
-  }else{
-    digitalWrite(In1, LOW);
-    digitalWrite(In2, LOW);
-  }
-  
-  currentTime = millis();
-  elapsedTime = currentTime - previousTime;
+  //currentTime = millis();
+  //elapsedTime = currentTime - previousTime;
 
   error = pwm_set_point - velocidad; // Referencia - medición del encoder
-  
-  integral += error * (elapsedTime/1000);
-  
 
-  derivative = (error-lastError) / (elapsedTime/1000);
+  if (fabs(error) >= 0.1){
+
+  integral += error * 0.09398;
+
+  derivative = (error-lastError) / 0.09398;
 
   output = kp*error + ki*integral + kd * derivative;
 
   lastError = error;
-  previousTime = currentTime;
+  //previousTime = currentTime;
 
-  int pwm_signal = (int)(fabs(output/12) * 255); // Mapeo a PWM
-  
- // int pwm_signal = (int)(fabs(pwm_set_point/OMEGA_MAX) * 255);
+  if (output < 0){
+    digitalWrite(In1, HIGH);
+    digitalWrite(In2, LOW);
+  }else if(output > 0){
+    digitalWrite(In1, LOW);
+    digitalWrite(In2, HIGH);
+  }else{
+    digitalWrite(In1, LOW);
+    digitalWrite(In2, LOW);
+  }
 
-  ledcWrite(PWM_CHNL, pwm_signal);
+  pwm_signal = (int)(fabs(output / 12)*130)+ 125; // Mapeo a PWM
+  pwm_prev = pwm_signal;
   //tmp_msg.data = velocidad;
   //rcl_publish(&tmp_publisher, &tmp_msg, NULL);
+  }else{
+    pwm_signal = pwm_prev;
+  }
+  ledcWrite(PWM_CHNL, pwm_signal);
 }
 
 void setup(){
-  set_microros_transports();  // Initialize Micro-ROS communication
+ set_microros_transports();  // Initialize Micro-ROS communication
 
-  // Setup Motor Driver pins 
+ // Setup Motor Driver pins
   pinMode(In1, OUTPUT);
   pinMode(In2, OUTPUT);
   digitalWrite(In1, LOW);
   digitalWrite(In2, LOW);
 
-  // Setup MOTOR PWM
+ // Setup MOTOR PWM
   pinMode(PWM_PIN, OUTPUT);
   ledcSetup(PWM_CHNL, PWM_FRQ, PWM_RES);
   ledcAttachPin(PWM_PIN, PWM_CHNL);
 
-  // Setup Encoder inputs
+ // Setup Encoder inputs
   pinMode(EncA, INPUT_PULLUP);    // Señal A del encoder como entrada con pull-up
   pinMode(EncB, INPUT_PULLUP);    // Señal B del encoder como entrada con pull-up
   attachInterrupt(digitalPinToInterrupt(EncA), Encoder, CHANGE);
@@ -246,20 +215,20 @@ void loop(){
     case AGENT_CONNECTED:
       EXECUTE_EVERY_N_MS(200, state = (RMW_RET_OK == rmw_uros_ping_agent(100, 1)) ? AGENT_CONNECTED : AGENT_DISCONNECTED;);
       if (state == AGENT_CONNECTED) {
-        velocidad_w();
+        //velocidad_w();
         //publish_vel();
         rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
       }
       break;
-    
+  
     case AGENT_DISCONNECTED:
       destroy_entities();
       state = WAITING_AGENT;
       break;
-      
+    
     default:
       break;
-}
+  }
 }
 
 // ======== ROS 2 Entity Creation and Cleanup Functions ========
@@ -271,31 +240,24 @@ bool create_entities() {
 
   // Initialize Button Publisher
   RCCHECK(rclc_publisher_init_default(
-      &motor_output_publisher,
-      &control_node,
-      ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-      "motor_output_ROSario"));
+    &motor_output_publisher,
+    &control_node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+    "motor_output_ROSario"));
 
-  RCCHECK(rclc_publisher_init_default(
-      &tmp_publisher,
-      &control_node,
-      ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-      "pwm_ROSario"));
-
-  // Initialize LED Subscriber
+   // Initialize LED Subscriber
   RCCHECK(rclc_subscription_init_default(
-      &set_point_subscriber,
-      &control_node,
-      ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-      "set_point_ROSario"));
+    &set_point_subscriber,
+    &control_node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+    "set_point_ROSario"));
 
   // Initialize Timer
   RCCHECK(rclc_timer_init_default(
-      &timer,
-      &support,
-      RCL_MS_TO_NS(timer_timeout),
-      timer_callback));
-  
+    &timer,
+    &support,
+    RCL_MS_TO_NS(timer_timeout),
+    timer_callback));
   // Initialize Executor
   // create zero initialised executor (no configured) to avoid memory problems
   executor = rclc_executor_get_zero_initialized_executor();
