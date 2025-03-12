@@ -50,7 +50,7 @@ float rpm2rads = 0.104719;
 // ======= Variables para el controlador PID
 float currentTime = 0.0, elapsedTime = 0.0, previousTime = 0.0,
       pwm_set_point = 0.0, error = 0.0, integral = 0.0, derivative = 0.0, lastError = 0.0, output = 0.0,
-      kp = 0.09, ki = 0.071, kd = 0.0025;
+      kp = 0.10, ki = 0.0857, kd = 0.00455;
 
 int pwm_signal = 0, pwm_prev = 0;
 
