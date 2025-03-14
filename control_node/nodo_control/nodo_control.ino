@@ -1,33 +1,32 @@
 // ======== Include necessary Micro-ROS and ESP32 libraries ========
-#include <micro_ros_arduino.h>           // Micro-ROS library for ESP32
-#include <rcl/rcl.h>                     // ROS 2 client library (Core)
-#include <rcl/error_handling.h>          // ROS 2 error handling utilities
-#include <rclc/rclc.h>                   // Micro-ROS client library
-#include <rclc/executor.h>               // Executor to handle callbacks
-#include <std_msgs/msg/float32.h>        // Float message type for LED brightness
-#include <rmw_microros/rmw_microros.h>   // Middleware functions for Micro-ROS
-#include <stdio.h>                       // Standard I/O for debugging
-#include <micro_ros_utilities/string_utilities.h>  // Utilities for handling strings
+#include <micro_ros_arduino.h>           // Biblioteca de Micro-ROS para ESP32
+#include <rcl/rcl.h>                     // Biblioteca principal de ROS 2
+#include <rcl/error_handling.h>          // Manejo de errores en ROS 2
+#include <rclc/rclc.h>                   // Biblioteca cliente de Micro-ROS
+#include <rclc/executor.h>               // Ejecutor para manejar callbacks
+#include <std_msgs/msg/float32.h>        // Tipo de mensaje Float32
+#include <rmw_microros/rmw_microros.h>   // Funciones de middleware para Micro-ROS
+#include <stdio.h>                       // Biblioteca de entrada/salida estándar para depuración
+#include <micro_ros_utilities/string_utilities.h>  // Utilidades para manejo de strings en Micro-ROS
 
-// ======== Micro-ROS Entity Declarations ========
-rclc_support_t support;       // Micro-ROS execution context
-rclc_executor_t executor;     // Manages execution of tasks (timers, subscribers)
-rcl_allocator_t allocator;    // Handles memory allocation
+// ======== Declaración de entidades de Micro-ROS ========
+rclc_support_t support;       // Contexto de ejecución de Micro-ROS
+rclc_executor_t executor;     // Administrador de tareas (timers, suscriptores)
+rcl_allocator_t allocator;    // Manejador de memoria
 
-rcl_node_t control_node;              // Defines the ROS 2 node
+rcl_node_t control_node;    // Definición del nodo de ROS 2
 
-rcl_publisher_t motor_output_publisher;    // Publishes motor output signal
-rcl_subscription_t set_point_subscriber;   // Subscribes to set point input signal
-rcl_timer_t timer;                   // Periodically publishes button state
+rcl_publisher_t motor_output_publisher;    // Publicador de la velocidad del motor
+rcl_subscription_t set_point_subscriber;   // Suscriptor de la referencia de velocidad
+rcl_timer_t timer;                   // Temporizador para publicar la velocidad
 
-// ======== Micro-ROS Messages Declarations ========
-std_msgs__msg__Float32 motor_output_msg;    // Holds the button state ("active" or "inactive")
-std_msgs__msg__Float32 set_point_msg;      // Holds the LED brightness value
+// ======== Declaración de mensajes de Micro-ROS ========
+std_msgs__msg__Float32 motor_output_msg;    // Mensaje de salida de velocidad del motor
+std_msgs__msg__Float32 set_point_msg;       // Mensaje de referencia de velocidad
 
-const double timer_timeout = 0.09398;  // Timer period (ms)
+const double timer_timeout = 0.09398;  // Periodo del temporizador en milisegundos
 
-// =========== Variables para el encoder
-
+// ======== Variables para el encoder ========
 volatile int32_t tiempo_act = 0,
                  tiempo_ant = 0,
                  delta_tiempo = 2e9,
@@ -36,53 +35,47 @@ int32_t revoluciones;
 
 float posicion=0, posactual = 0, posanterior = 0,
       velocidad = 0, loop_vel = 0,
-      resolucion = 0.7891;  //Definir resolución del encoder
+      resolucion = 0.7891;  // Resolución del encoder
 
-int pulsos = 456, sign = 0;      //Número de pulsos a la salida del motorreductor
+int pulsos = 456,       //Número de pulsos a la salida del motorreductor
+    sign = 0;
 
 volatile bool encoderDirection = false;
 
-float rpm2rads = 0.104719;
+float rpm2rads = 0.104719;  // Factor de conversión de RPM a rad/s
 
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////7
-
-// ======= Variables para el controlador PID
+// ======== Variables para el controlador PID ========
 float currentTime = 0.0, elapsedTime = 0.0, previousTime = 0.0,
       pwm_set_point = 0.0, error = 0.0, integral = 0.0, derivative = 0.0, lastError = 0.0, output = 0.0,
       kp = 0.10, ki = 0.0857, kd = 0.00455;
 
 int pwm_signal = 0, pwm_prev = 0;
 
-// ======== Macro Definitions ========
-// Error handling macros
-//Executes fn and returns false if it fails.
+// ======== Definición de macros para control y depuración ========
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){return false;}}
-// Executes fn, but ignores failures.
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){}}
-// Executes a statement (X) every N milliseconds
 #define EXECUTE_EVERY_N_MS(MS, X)  do { \
   static volatile int64_t init = -1; \
   if (init == -1) { init = uxr_millis();} \
   if (uxr_millis() - init > MS) { X; init = uxr_millis();} \
 } while (0)\
 
-// ======== Hardware Pin Definitions ========
-#define PWM_PIN  26 // EnA Pin in Motor Driver
-#define PWM_FRQ 5000 //Frecuencia de PWM
-#define PWM_RES 8 //Resolución de PWM 2^10 = 1024
+// ======== Definición de pines de hardware ========
+#define PWM_PIN  26 // Pin de salida PWM para el motor
+#define PWM_FRQ 5000 // Frecuencia de PW
+#define PWM_RES 8 // Resolución de PWM (2^8 = 256 niveles)
 #define PWM_CHNL 0 // Canal de PWM
 
-#define In1  14 // Pin de salida digital
-#define In2  27 // Pin de salida digital
+#define In1  14 // Pin de control del puente H
+#define In2  27 // Pin de control del puente H
 
-#define EncA  33 // GPIO para señal A del encoder
-#define EncB  32 // GPIO para señal B del encoder
+#define EncA  33 // Pin de la señal A del encoder
+#define EncB  32 // Pin de la señal B del encoder
 
 #define OMEGA_MIN -29.321
 #define OMEGA_MAX 29.321
 
-// ======== Micro-ROS Connection State Machine ========
+// ======== Máquinad de estados para conexión de Micro-ROS ========
 enum states {
   WAITING_AGENT,        // Waiting for ROS 2 agent connection
   AGENT_AVAILABLE,      // Agent detected
@@ -90,10 +83,11 @@ enum states {
   AGENT_DISCONNECTED    // Connection lost
 } state;
 
-// ======== Function Prototypes ========
+// ======== Declaración de funciones ========
 bool create_entities();
 void destroy_entities();
 
+// ======== Funciones ========
 void IRAM_ATTR Encoder(){
   if (digitalRead(EncB) == digitalRead(EncA)){
     contador++;
@@ -114,11 +108,13 @@ void velocidad_w(){
   else{
     sign = -1;
   }
-   //Cálculo de la velocidad mediante un delta de tiempo 
+  
+  //Cálculo de la velocidad
   if(delta_tiempo > 250){
-    velocidad = 60000000/(pulsos * delta_tiempo); //  Convertir a segundos nuevamente multiplicando por 60000000
-    velocidad = velocidad*rpm2rads*sign;
+    velocidad = 60000000/(pulsos * delta_tiempo); // Conversión a segundos
+    velocidad = velocidad*rpm2rads*sign; // Conversión a rad/s
   }
+  
   if (micros() - tiempo_act > 100000) {  // 100,000 us = 100 ms
     velocidad = 0.0;
   }
@@ -129,7 +125,7 @@ void publish_vel(){
   rcl_publish(&motor_output_publisher, &motor_output_msg, NULL);
 }
 
-// ======== Timer Callback: Publishes motor angular velocity Periodically ========
+// ======== Timer Callback: Publicación de la velocidad angular del motor ========
 void timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
   (void) last_call_time;
   if (timer != NULL) {
@@ -137,13 +133,10 @@ void timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
     publish_vel();
   }
 }
-// ======== Subscriber Callback: Adjusts LED Brightness ========
+// ======== Subscriber Callback: Lectura de señal de referencia ========
 void subscription_callback(const void * msgin) { 
   const std_msgs__msg__Float32 * msg = (const std_msgs__msg__Float32 *)msgin;
   pwm_set_point = constrain(msg->data, OMEGA_MIN, OMEGA_MAX);
-
-  //currentTime = millis();
-  //elapsedTime = currentTime - previousTime;
 
   error = pwm_set_point - velocidad; // Referencia - medición del encoder
 
@@ -156,7 +149,6 @@ void subscription_callback(const void * msgin) {
   output = kp*error + ki*integral + kd * derivative;
 
   lastError = error;
-  //previousTime = currentTime;
 
   if (output < 0){
     digitalWrite(In1, HIGH);
@@ -169,36 +161,36 @@ void subscription_callback(const void * msgin) {
     digitalWrite(In2, LOW);
   }
 
-  pwm_signal = (int)(fabs(output / 12)*130)+ 125; // Mapeo a PWM 130(Numero de PWM disponible)
+  pwm_signal = (int)(fabs(output / 12)*130)+ 125; // Mapeo a PWM (Con numero de PWM disponible)
   pwm_prev = pwm_signal;
-  //tmp_msg.data = velocidad;
-  //rcl_publish(&tmp_publisher, &tmp_msg, NULL);
   }else{
     pwm_signal = pwm_prev;
   }
   ledcWrite(PWM_CHNL, pwm_signal);
 }
 
+// ======== Configuración inicial del sistema ========
 void setup(){
- set_microros_transports();  // Initialize Micro-ROS communication
-
- // Setup Motor Driver pins
+  set_microros_transports();  // Inicialización de communicación con Micro Ros
+  
+  // Configuración de pines de saida para el puente H
   pinMode(In1, OUTPUT);
   pinMode(In2, OUTPUT);
   digitalWrite(In1, LOW);
   digitalWrite(In2, LOW);
 
- // Setup MOTOR PWM
+  // Configuración de canal de señal PWM
   pinMode(PWM_PIN, OUTPUT);
   ledcSetup(PWM_CHNL, PWM_FRQ, PWM_RES);
   ledcAttachPin(PWM_PIN, PWM_CHNL);
 
- // Setup Encoder inputs
+  // Entradas del encoder del motor
   pinMode(EncA, INPUT_PULLUP);    // Señal A del encoder como entrada con pull-up
   pinMode(EncB, INPUT_PULLUP);    // Señal B del encoder como entrada con pull-up
   attachInterrupt(digitalPinToInterrupt(EncA), Encoder, CHANGE);
 }
 
+// ======== Bucle principal ========
 void loop(){
   switch (state) {
     case WAITING_AGENT:
@@ -231,37 +223,38 @@ void loop(){
   }
 }
 
-// ======== ROS 2 Entity Creation and Cleanup Functions ========
+// ======== Funciones de creación y limpieza de entidades de ROS 2 ========
 bool create_entities() {
-  // Initialize Micro-ROS
+  // Iniciaización de  Micro-ROS
   allocator = rcl_get_default_allocator();
   RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
   RCCHECK(rclc_node_init_default(&control_node, "control_node_ROSario", "", &support));
 
-  // Initialize Button Publisher
+  // Publicador
   RCCHECK(rclc_publisher_init_default(
     &motor_output_publisher,
     &control_node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
     "motor_output_ROSario"));
 
-   // Initialize LED Subscriber
+  // Suscriptor
   RCCHECK(rclc_subscription_init_default(
     &set_point_subscriber,
     &control_node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
     "set_point_ROSario"));
 
-  // Initialize Timer
+  // Timer
   RCCHECK(rclc_timer_init_default(
     &timer,
     &support,
     RCL_MS_TO_NS(timer_timeout),
     timer_callback));
-  // Initialize Executor
-  // create zero initialised executor (no configured) to avoid memory problems
+  
+  // Executor
   executor = rclc_executor_get_zero_initialized_executor();
   RCCHECK(rclc_executor_init(&executor, &support.context, 2, &allocator));
+  
   RCCHECK(rclc_executor_add_subscription(&executor, &set_point_subscriber, &set_point_msg, &subscription_callback, ON_NEW_DATA));
   RCCHECK(rclc_executor_add_timer(&executor, &timer));
 
